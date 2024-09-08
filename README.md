@@ -11,7 +11,7 @@ As an undergraduate researcher in the Bathe BioNanoLab at MIT, this project is m
   #### CellRank.ipynb
   - Google colab that uses Cell Rank library to turn pseudo-time proteomic data into a cell to cell transition matrix 
   
-  #### Decode_CellRank.ipynb
+  #### Decoding_CellRank.ipynb
   - Jupyter notebook that decodes cell rank matrix to a protein-to-protein transition matrix
   
 ### Data
