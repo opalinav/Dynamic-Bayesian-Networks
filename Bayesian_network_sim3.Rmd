@@ -39,12 +39,13 @@ library(ggplot2)
 library(RColorBrewer)
 library(flifo)
 library(pracma)
+library(usedist)
 ```
 
 FUNCTIONS
 
 ```{r}
-set.seed(2)
+#set.seed(2)
 #Function to sample N points from a modified gamma distribution with a nonzero
 #probability of P, and shape/scale parameters given by sh and sc
 Sample<-function(N=1,P=0.8,sh=2,sc=0.5)
@@ -313,6 +314,46 @@ EdgeStrengthCont<-function(data,from,to,controls,tolerance=0.5,samples=min(20*(1
   return(value/count)
   }
 }
+
+
+EdgeStrengthContFast<-function(data,from,to,controls,tolerance=0.05*sqrt(length(controls)),
+                               samples=min(20*(1/tolerance)^length(controls),300),distances_provided=NULL)
+{
+  controlnames<-names(data)[controls]
+  print(paste("Edge Strength from ", names(data)[from], " to ", names(data)[to], " with controls: ",controlnames,sep = ""))
+  #If no controls just return simple Pearson correlation
+  if (is.null(controls)){
+    return(cor(data[,from],data[,to]))
+  }
+  
+  #If distance matrix for controls use it, otherwise calculate
+  if(is.null(distances_provided)){distances<-dist(data[,controls])}
+  else{distances<-distances_provided}
+  print("distance matrix created")
+  
+  value<-0
+  count<-0
+  countbad<-0
+  N<-dim(data)[1]
+  for (i in 1:samples){ #sample points from dataset randomly, for each one create subset of close points, calculate correlation in subset
+    samprow<-sample(1:N,1)
+    withintol<-(dist_get(distances,samprow,1:N)<tolerance) #take only points whose control values are within tolerance of sampled point
+    if(sum(withintol)<10){countbad<-countbad+1
+                    next}
+    sub<-data[withintol,]
+    c<-cor(sub[,from],sub[,to])
+    if(!is.na(c))
+    {
+      count<-count+1
+      value<-value+c
+      #print(c(c,value/count))
+    }
+    else  {countbad<-countbad+1}
+  }
+  print(paste(countbad, "bad samplings out of",samples))
+  return(value/count)
+}
+
 
 # Function to estimate the effect
 # data = data frame/table whose first columns are variable values. May have other 
@@ -694,7 +735,8 @@ sensitivity<-function(matrix,dims,range){
 }
 
 #have same matrix with differing number of data points, nodes x axis, datapoints y -axis, score (color in heatmap)
-score<-function(bootstrap, mat){
+score<-function(bootstrap, mat,data, tolerance){
+  data<-as.data.frame(scale(data,center=TRUE))
   sum_edges<-0
   sum_dirs<-0
   cap<-toupper(letters)
@@ -718,10 +760,15 @@ score<-function(bootstrap, mat){
       edgestrength<-1
     }
     strength<-bootstrap['strength'][i,]
+    controls<-seq(1,nrow(mat))
+    controls<-controls[-c(to,from)]
+    
+    weight<-EdgeStrengthContFast(data,to,from,controls, tolerance=tolerance)
+    
     #add cost object of deviation from edge presence and direction
     #if edge exists weigh by its strength
-    sum_edges<-sum_edges+edgestrength*abs(strength-edge)
-    sum_dirs<-sum_dirs+edgestrength*abs(dir-direct)
+    sum_edges<-sum_edges+weight*abs(strength-edge)
+    sum_dirs<-sum_dirs+weight*abs(dir-direct)
   }
   N<-dim(mat)[1]
   return(c(sum_edges/(N^2),sum_dirs/(N^2)))
@@ -788,6 +835,21 @@ simulation_heatmap<-function(datapoints,nodes){
   return(data)
 }
 
+combine_linsteps<-function(time_steps,matrix,data){
+  dat_all<-data.table()
+  time<-rep(time_steps,each=nrow(data))
+  for (t in time_steps){
+    dat<-Linstep(matrix,data, t)
+    dat_all<-rbind(dat_all,dat)
+    
+    
+  }
+  #dat_all<-Disc(dat_all,200)
+  dat_all$Time<-time
+  
+  return(dat_all)
+}
+
 
 
 ```
@@ -848,14 +910,15 @@ H<-c(0,0,0,0,0,0,0,0)
 mat<-rbind(A,B,C,D,E,F,G,H)
 mat
 dat<-create_net(mat,10000)
+#dat_std<-as.data.frame(scale(dat,center=True))
 
-d<-Disc(dat,200)
+d<-Disc(dat_std,200)
 BN<-tabu(d)
 plot(BN)
 Bass<-boot.strength(d,R=500,m=3000,algorithm = "tabu")
 print(Bass)
 
-print(score(Bass,mat))
+print(score(Bass,mat,dat,tolerance=.5))
 
 ```
 
@@ -1027,13 +1090,13 @@ Bass<-boot.strength(dat,R=500,m=3000,algorithm = "tabu")
 al<-1
 A<-Sample(N=20000)
 B<-Sample(N=20000)
-C<-CondSamp(c(TRUE,TRUE),cbind(A,B),effsize = c(1*al,0.2*al))
-D<-CondSamp(c(TRUE),cbind(B),effsize = c(0.5*al))
-J<-CondSamp(c(TRUE),cbind(C),effsize = c(0.6*al))
-E<-CondSamp(c(TRUE,TRUE,TRUE),cbind(C,D,J),effsize = c(0.8*al,1*al,0.7*al))
-G<-CondSamp(c(TRUE,TRUE),cbind(E,B),effsize = c(0.5*al,0.4*al))
-H<-CondSamp(c(TRUE,TRUE,TRUE),cbind(C,E,J),effsize = c(0.2*al,0.4*al,1*al))
-I<-CondSamp(c(TRUE,TRUE,TRUE),cbind(B,D,G),effsize = c(0.1*al,0.4*al,1*al))
+C<-CondSamp(cbind(A,B),effsize = c(1*al,0.2*al))
+D<-CondSamp(cbind(B),effsize = c(0.5*al))
+J<-CondSamp(cbind(C),effsize = c(0.6*al))
+E<-CondSamp(cbind(C,D,J),effsize = c(0.8*al,1*al,0.7*al))
+G<-CondSamp(cbind(E,B),effsize = c(0.5*al,0.4*al))
+H<-CondSamp(cbind(C,E,J),effsize = c(0.2*al,0.4*al,1*al))
+I<-CondSamp(cbind(B,D,G),effsize = c(0.1*al,0.4*al,1*al))
 
 vars<-c("A","B","C","D","E","G","H","I","J")
 
@@ -1058,8 +1121,8 @@ mmpc1<-boot.strength(dat,R=500,m=3000,algorithm = "mmpc")
 tabu2<-boot.strength(dat,R=500,m=3000,algorithm = "tabu")
 mmhc1<-boot.strength(dat,R=500,m=3000,algorithm = "mmhc")
 h2pc1<-boot.strength(dat,R=500,m=3000,algorithm = "h2pc")
-
-AC_B<-EdgeStrengthCont(data,1,3,2)
+#EdgeStrengthCont<-function(data,from,to,controls,tolerance=0.5,samples=min(20*(1/tolerance)^length(controls),300),onlypos=FALSE)
+#AC_B<-EdgeStrengthContFast(data,1,3,2)
 BC_A<-EdgeStrengthCont(data,2,3,1)
 CJ<-EdgeStrengthCont(data,3,9,NULL)
 CE_DJ<-EdgeStrengthCont(data,3,5,c(4,9))
@@ -1120,19 +1183,212 @@ GI<-EdgeStrengthCont(data,6,8,NULL)
 
 ```
 
+
+
+CELL RANK MATRIX
 ```{r}
+###used this for creating data for cellrank
+set.seed(8)
 #Create a simulated dynamic network of A, B|A, C|B, D|C, E|B,C by starting with
 #independent variables and propagating
-A<-Sample(N=10000,P=1.2,sh=3)
-B<-Sample(N=10000,P=1.2,sh=0.2)
-C<-Sample(N=10000,P=1.2,sh=0.2)
-D<-Sample(N=10000,P=1.2,sh=0.2)
-E<-Sample(N=10000,P=1.2,sh=0.2)
-dat1<-as.data.frame(cbind(A,B,C,D,E))
-names(dat1)<-c("A","B","C","D","E")
-M1<-t(matrix(c(0.8,0,0,0,0,0.2,0.8,0,0,0,0,0.2,0.8,0,0,0,0,0.2,0.8,0,0,0.2,0.2,0,0.8),nrow = 5,ncol=5))
-dat2<-Linstep(M1,dat1,5)
 
-dat3<-Linstep(M1,dat1,10)
+A<-SampleImp(N=5000,P=.9,sh=.2)
+B<-SampleImp(N=5000,P=.9,sh=0.2)
+C<-SampleImp(N=5000,P=.9,sh=0.2)
+D<-SampleImp(N=5000,P=.9,sh=0.2)
+E<-SampleImp(N=5000,P=.9,sh=0.2)
+F1<-SampleImp(N=5000,P=.9,sh=.2)
+G<-SampleImp(N=5000,P=.9,sh=0.2)
+H<-SampleImp(N=5000,P=.9,sh=0.2)
+I<-SampleImp(N=5000,P=.9,sh=0.2)
+J<-SampleImp(N=5000,P=.9,sh=0.2)
+dat1<-as.data.frame(cbind(A,B,C,D,E,F1,G,H,I,J))
+names(dat1)<-c("A","B","C","D","E", "F1", 'G', 'H','I', 'J')
+# Create vectors vecA through vecJ with length 10 and set all diagonals to 0.8
+vecA <- c(1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+vecB <- c(.2, 0.8, 0, 0, 0, 0, 0, 0, 0, 0)
+vecC <- c(.3, .1, 0.6, 0, 0, 0, 0, 0, 0, 0)
+vecD <- c(0, .3, .2, 0.5, 0, 0, 0, 0, 0, 0)
+vecE <- c(.1, 0, .4, 0, 0.5, 0, 0, 0, 0, 0)
+vecF <- c(0, 0, 0, 0, .4, 0.6, 0, 0, 0, 0)
+vecG <- c(0, 0, .2, 0, .1, .1, 0.6, 0, 0, 0)
+vecH <- c(.5, 0, 0, .2, 0, .1, 0, 0.2, 0, 0)
+vecI <- c(0, 0, 0, .3, .2, 0, .1, 0, 0.4, 0)
+vecJ <- c(0, 0, 0, 0, .1, 0, 0, .5, 0, 0.4)
+
+
+
+# Merge the vectors into a matrix
+merged_matrix <- t(matrix(cbind(vecA, vecB, vecC, vecD, vecE, vecF, vecG, vecH, vecI, vecJ), ,nrow = 10,ncol=10))
+
+
+
+
+#c(5,10,15,20,25,30,35,40)
+dat_new<-combine_linsteps(c(5,10,15,20,25,30,35,40),merged_matrix,dat1)
+write.csv(dat_new, 'linstep_data2.csv')
+
+#BN<-tabu(dat_new)
+#plot(BN)
+#Bass<-boot.strength(dat_new,R=500,m=3000,algorithm = "tabu")
+#print(Bass)
+library(dplyr)
+
+# Group by timestep and calculate the average for each protein
+averages <- dat_new %>%
+  group_by(Time) %>%
+  summarise(
+    Avg_A = mean(A),
+    Avg_B = mean(B),
+    Avg_C = mean(C),
+    Avg_D = mean(D),
+    Avg_E = mean(E),
+    Avg_F1 = mean(F1),
+    Avg_G = mean(G),
+    Avg_H = mean(H),
+    Avg_I =mean(I),
+    Avg_J=mean(J)
+  )
+
+# Print the result
+
+print(averages)
+
 
 ```
+
+```{r}
+
+
+
+library(ggplot2)
+
+# Reshape the dataframe to long format
+library(tidyr)
+df_long <- gather(dat_new, key = "Protein", value = "Value", -Time)
+
+# Create a ggplot object with facets for each protein
+ggplot(df_long, aes(x = Time, y = Value)) +
+  
+  # Add a geom_point layer for individual data points
+  geom_point(alpha = 0.5) +
+  
+  # Add a geom_line layer for connecting points (optional)
+  geom_line(stat = "summary", fun = "mean", color = "blue", size = 1) +
+  
+  # Facet by Protein to create separate plots for each protein
+  facet_wrap(~Protein, scales = "free_y") +
+  
+  # Add labels and title
+  labs(
+    x = "Time",
+    y = "Average Protein Value",
+    title = "Average Protein Values at Different Time Points"
+  )
+
+
+```
+
+
+```{r}
+# Assuming df is your data frame with columns "A" through "J" and "Time"
+
+# Install and load the ggplot2 package if not already installed
+# install.packages("ggplot2")
+library(ggplot2)
+
+# Reshape the dataframe to long format
+library(tidyr)
+df_long <- gather(dat_new, key = "Protein", value = "Value", -Time)
+
+# Create a ggplot object with facets for each protein
+ggplot(df_long, aes(x = Time, y = Value)) +
+  
+  # Add a geom_point layer for individual data points
+  geom_point(alpha = 0.5) +
+  
+  # Add a geom_line layer for connecting points (optional)
+  geom_line(stat = "summary", fun = "mean", color = "blue", size = 1) +
+  
+  # Facet by Protein to create separate plots for each protein
+  facet_wrap(~Protein, scales = "free_y") +
+  
+  # Add labels and title
+  labs(
+    x = "Time",
+    y = "Average Protein Value",
+    title = "Average Protein Values at Different Time Points"
+  )
+
+```
+
+
+
+
+```{r}
+set.seed(4)
+#changing P doesn't change anything
+A<-Sample(N=10000,P=.9,sh=3)
+B<-Sample(N=10000,P=.9,sh=2)
+C<-Sample(N=10000,P=.9,sh=.5)
+D<-Sample(N=10000,P=.9,sh=0.2)
+E<-Sample(N=10000,P=.9,sh=0.2)
+dat2<-as.data.frame(cbind(A,B,C,D,E))
+names(dat2)<-c("A","B","C","D","E")
+M2<-t(matrix(c(0.8,0,0,0,0,0.9,0.8,0,0,0,0,0.4,0.8,0,0,0,0,0.2,0.8,0,0,0.8,0.8,0,0.8),nrow = 5,ncol=5))
+dat_new<-combine_linsteps(c(5,10,15,20),M2,dat2)
+
+
+BN<-tabu(dat_new)
+plot(BN)
+Bass<-boot.strength(dat_new,R=500,m=3000,algorithm = "tabu")
+print(Bass)
+
+```
+
+
+```{r}
+set.seed(4)
+A1<-c(.8,0,0,0)
+B1<-c(.3,.8,0,0)
+C1<-c(0,0,.8,0)
+D1<-c(0,.5,0,.8)
+M3<-matrix(rbind(A1,B1,C1,D1),nrow=4, ncol=4)
+
+A<-Sample(N=10000,P=.9,sh=3)
+B<-Sample(N=10000,P=.9,sh=.5)
+C<-Sample(N=10000,P=.9,sh=.5)
+D<-Sample(N=10000,P=.9,sh=0.2)
+
+dat3<-as.data.frame(cbind(A,B,C,D))
+names(dat3)<-c("A","B","C","D")
+dat_new<-combine_linsteps(c(5,10,15,20),M3,dat3)
+
+BN<-tabu(dat_new)
+plot(BN)
+Bass<-boot.strength(dat_new,R=500,m=3000,algorithm = "tabu")
+print(Bass)
+
+#determinant non-zero, maybe unitary (norm 1)
+```
+
+
+
+```{r}
+#gen matrice instead
+a<-gen_matrice(5)
+a
+dat<-create_net(a,10000)
+
+```
+
+```{r}
+dat_lin<-combine_linsteps(c(5,10,15,20),mat,dat_ex1)
+
+BN<-tabu(dat_lin)
+plot(BN)
+Bass<-boot.strength(d,R=500,m=3000,algorithm = "tabu")
+print(Bass)
+
+```
+
